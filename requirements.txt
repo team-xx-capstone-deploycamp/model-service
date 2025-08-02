@@ -7,3 +7,4 @@ flask>=2.0.0
 psycopg2-binary>=2.9.0
 python-dotenv>=0.19.0
 dvc==3.61.0
+dvc_s3==3.2.2
