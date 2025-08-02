@@ -1,0 +1,7 @@
+[core]
+    remote = minio
+['remote "minio"']
+    url = s3://ml-datasets
+    access_key_id = ${MINIO_SERVER_URL}
+    secret_access_key = ${MINIO_ROOT_USER}
+    endpointurl = ${MINIO_SERVER_URL}
