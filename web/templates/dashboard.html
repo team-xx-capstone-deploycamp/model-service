@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h2>Luigi Pipeline Dashboard</h2>
+
+        <!-- Status Cards -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Luigi Scheduler</h5>
+                        <p class="card-text">
+                            <span class="badge {% if luigi_status %}bg-success{% else %}bg-danger{% endif %}">
+                                {% if luigi_status %}Running{% else %}Stopped{% endif %}
+                            </span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Total Tasks</h5>
+                        <p class="card-text">{{ task_history|length }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <button class="btn btn-primary" onclick="runPipeline()">Run Pipeline</button>
+                <a href="{{ url_for('luigi_ui') }}" class="btn btn-info" target="_blank">Open Luigi UI</a>
+                <button class="btn btn-secondary" onclick="refreshStatus()">Refresh Status</button>
+            </div>
+        </div>
+
+        <!-- Task History -->
+        <div class="row">
+            <div class="col-md-12">
+                <h4>Recent Task History</h4>
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Task Family</th>
+                                <th>Task ID</th>
+                                <th>Status</th>
+                                <th>Host</th>
+                                <th>Start Time</th>
+                                <th>Finish Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="taskTable">
+                            {% for task in task_history %}
+                            <tr>
+                                <td>{{ task.family }}</td>
+                                <td>{{ task.id }}</td>
+                                <td>
+                                    <span class="badge bg-{% if task.status == 'DONE' %}success{% elif task.status == 'FAILED' %}danger{% else %}warning{% endif %}">
+                                        {{ task.status }}
+                                    </span>
+                                </td>
+                                <td>{{ task.host }}</td>
+                                <td>{{ task.start_time }}</td>
+                                <td>{{ task.finish_time or 'N/A' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
