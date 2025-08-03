@@ -41,6 +41,7 @@ logs/
 
 # Data files
 data/*.csv
+data/**/*.csv
 data/*.txt
 !data/.gitkeep
 

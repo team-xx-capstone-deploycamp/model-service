@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONPATH=/app
+      - LUIGI_CONFIG_PATH=/app/config/luigi.cfg
+    ports:
+      - "5001:5001"
+    command: python web/app.py
