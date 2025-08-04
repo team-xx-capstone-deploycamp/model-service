@@ -3,11 +3,11 @@ name: Production Deployment
 on:
   pull_request:
     branches:
-      - main
+      - prod
     types: [opened, synchronize]
   push:
     branches:
-      - main
+      - prod
 
 jobs:
   # Run on PR to main
@@ -32,8 +32,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -r requirements.txt
-          uv pip install -r requirements-dev.txt
+          uv pip install -r requirements.txt --system
+          uv pip install -r requirements-dev.txt --system
 
       - name: Run linting with flake8
         run: |
@@ -102,8 +102,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -r requirements.txt
-          uv pip install -r requirements-dev.txt
+          uv pip install -r requirements.txt --system
+          uv pip install -r requirements-dev.txt --system
 
       - name: Run tests with coverage
         run: |
