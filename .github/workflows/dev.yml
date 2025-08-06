@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - dev
+    paths:
+      - 'data/**'
+      - 'src/**'
+      - 'web/**'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - 'docker-compose.yml'
 
 jobs:
   test:
@@ -24,7 +32,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -r requirements.txt --system
+          uv pip install -r docker/luigi/requirements.txt --system
+          uv pip install -r docker/wrapper/requirements.txt --system
           uv pip install -r requirements-dev.txt --system
 
       - name: Run linting with flake8
@@ -42,15 +51,39 @@ jobs:
           name: coverage-report
           path: coverage.xml
 
-  semantic-version:
+  # Check for changes in data and src directories
+  check-changes:
     needs: test
     runs-on: ubuntu-latest
     outputs:
+      data_src_only: ${{ steps.check-paths.outputs.data_src_only }}
+      dockerfile_changed: ${{ steps.check-paths.outputs.dockerfile_changed }}
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Check changed paths
+        id: check-paths
+        run: |
+          # Check if only data and src directories changed
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+          echo "Changed files: $CHANGED_FILES"
+
+          # Check if any files outside data and src changed
+          if echo "$CHANGED_FILES" | grep -qv "^data/\|^src/"; then
+            echo "data_src_only=false" >> $GITHUB_OUTPUT
+          else
+            echo "data_src_only=true" >> $GITHUB_OUTPUT
+          fi
+
+          # Check if Dockerfile changed
+          if echo "$CHANGED_FILES" | grep -q "^Dockerfile$"; then
+            echo "dockerfile_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "dockerfile_changed=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Calculate version
         id: version
@@ -61,31 +94,78 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Building version: ${VERSION}"
 
-  build-and-deploy:
-    needs: [test, semantic-version]
+  # Only copy files and rebuild docker-compose if only data and src changed
+  update-without-rebuild:
+    needs: check-changes
+    if: needs.check-changes.outputs.data_src_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker Image
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull latest image
         run: |
-          docker build -t ${{ secrets.REGISTRY_URL }}/app:${{ needs.semantic-version.outputs.version }} .
-          docker build -t ${{ secrets.REGISTRY_URL }}/app:dev-latest .
+          docker pull ghcr.io/${{ github.repository }}:dev-latest || true
+
+      - name: Update docker-compose
+        run: |
+          # Update docker-compose.yml to use the latest image
+          sed -i 's/build:/image: ghcr.io\/${{ github.repository }}:dev-latest\n    #build:/' docker-compose.yml
+          cat docker-compose.yml
+
+          # Run docker-compose to update the container with new files
+          docker-compose up -d --no-build
+
+      - name: Deploy to Dev Environment
+        run: |
+          echo "Deploying updated files to dev environment without rebuilding image..."
+
+  # Build and push image if Dockerfile or other files changed
+  build-and-deploy:
+    needs: [check-changes]
+    if: needs.check-changes.outputs.data_src_only == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.check-changes.outputs.version }}
+            type=raw,value=dev-latest
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
       - name: Test Docker Image
         run: |
-          docker-compose run test
-
-      - name: Login to Registry
-        run: echo ${{ secrets.REGISTRY_PASSWORD }} | docker login ${{ secrets.REGISTRY_URL }} -u ${{ secrets.REGISTRY_USERNAME }} --password-stdin
-
-      - name: Push Image
-        run: |
-          docker push ${{ secrets.REGISTRY_URL }}/app:${{ needs.semantic-version.outputs.version }}
-          docker push ${{ secrets.REGISTRY_URL }}/app:dev-latest
+          docker pull ghcr.io/${{ github.repository }}:dev-latest
+          docker tag ghcr.io/${{ github.repository }}:dev-latest app:dev-latest
+          docker-compose run app python -m pytest
 
       - name: Deploy to Dev Environment
         run: |
           # Your deployment script here with version
-          echo "Deploying version ${{ needs.semantic-version.outputs.version }} to dev environment..."
-          # kubectl set image deployment/myapp container=${{ secrets.REGISTRY_URL }}/app:${{ needs.semantic-version.outputs.version }}
+          echo "Deploying version ${{ needs.check-changes.outputs.version }} to dev environment..."
+          # kubectl set image deployment/myapp container=ghcr.io/${{ github.repository }}:${{ needs.check-changes.outputs.version }}

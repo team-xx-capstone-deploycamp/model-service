@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import luigi
 import os
-from src.pipeline.tasks import MLPipeline
+from pipeline.tasks import MLPipeline
 
 if __name__ == '__main__':
     # Set Luigi config file path
