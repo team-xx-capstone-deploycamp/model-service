@@ -68,7 +68,7 @@ docker compose -f docker-compose.dev.yml up -d
 # LUIGI_HOST=production-luigi-scheduler
 
 # Run the service with Docker Compose for production
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.ci.yml up -d
 
 # Access the web interface
 # Open http://localhost:5001 in your browser

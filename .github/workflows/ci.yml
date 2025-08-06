@@ -40,7 +40,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -r requirements.txt --system
+          uv pip install -r docker/luigi/requirements.txt --system
+          uv pip install -r docker/wrapper/requirements.txt --system
           uv pip install -r requirements-dev.txt --system
 
       - name: Run linting with flake8
@@ -123,7 +124,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -r requirements.txt --system
+          uv pip install -r docker/luigi/requirements.txt --system
+          uv pip install -r docker/wrapper/requirements.txt --system
           uv pip install -r requirements-dev.txt --system
 
       - name: Run Luigi Pipeline
@@ -156,7 +158,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -r requirements.txt --system
+          uv pip install -r docker/luigi/requirements.txt --system
+          uv pip install -r docker/wrapper/requirements.txt --system
           uv pip install -r requirements-dev.txt --system
 
       - name: Run tests with coverage
