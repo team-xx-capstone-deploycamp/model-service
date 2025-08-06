@@ -1,15 +1,47 @@
-version: '3.8'
-
 services:
-  app:
+  luigi:
     build:
       context: .
-      dockerfile: Dockerfile
-    volumes:
-      - .:/app
-    environment:
-      - PYTHONPATH=/app
-      - LUIGI_CONFIG_PATH=/app/config/luigi.cfg
+      dockerfile: docker/luigi/Dockerfile
+    container_name: luigi_scheduler
     ports:
-      - "5001:5001"
-    command: python web/app.py
+      - "8082:8082"
+    volumes:
+      - ./src:/app/src
+      - ./config/luigi.cfg:/app/config/luigi.cfg
+      - ./logs:/var/log/luigi
+    environment:
+      - LUIGI_CONFIG_PATH=/app/config/luigi.cfg
+      - LOG_DIR=/var/log/luigi
+      - LUIGI_DB_HOST=${LUIGI_DB_HOST:-postgres}
+      - LUIGI_DB_NAME=${LUIGI_DB_NAME:-luigidb}
+      - LUIGI_DB_USER=${LUIGI_DB_USER:-luigi}
+      - LUIGI_DB_PASSWORD=${LUIGI_DB_PASSWORD:-luigi123}
+      - LUIGI_DB_PORT=${LUIGI_DB_PORT:-5432}
+
+  wrapper:
+    build:
+      context: .
+      dockerfile: docker/wrapper/Dockerfile
+    container_name: luigi_wrapper
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./web:/app/web
+      - luigi_state:/var/luigi/state
+    environment:
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-mykey}
+      - FLASK_ADMIN_USERNAME=${FLASK_ADMIN_USERNAME:-admin}
+      - FLASK_ADMIN_PASSWORD=${FLASK_ADMIN_PASSWORD:-admin123}
+      - LUIGI_DB_HOST=${LUIGI_DB_HOST:-postgres}
+      - LUIGI_DB_NAME=${LUIGI_DB_NAME:-luigidb}
+      - LUIGI_DB_USER=${LUIGI_DB_USER:-luigi}
+      - LUIGI_DB_PASSWORD=${LUIGI_DB_PASSWORD:-luigi123}
+      - LUIGI_DB_PORT=${LUIGI_DB_PORT:-5432}
+      - LOG_DIR=/app/logs
+      - LUIGI_HOST=luigi_scheduler
+    depends_on:
+      - luigi
+
+volumes:
+  luigi_state:

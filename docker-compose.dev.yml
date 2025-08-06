@@ -1,0 +1,57 @@
+services:
+  luigi:
+    build:
+      context: .
+      dockerfile: docker/luigi/Dockerfile
+    container_name: luigi_scheduler
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./src:/app/src
+      - ./config/luigi.local.cfg:/app/config/luigi.cfg
+      - ./logs:/var/log/luigi
+    environment:
+      - LUIGI_CONFIG_PATH=/app/config/luigi.cfg
+      - LOG_DIR=/var/log/luigi
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=luigi
+      - POSTGRES_USER=luigi
+      - POSTGRES_PASSWORD=luigipass
+      - POSTGRES_PORT=5432
+    depends_on:
+      - postgres
+
+  wrapper:
+    build:
+      context: .
+      dockerfile: docker/wrapper/Dockerfile
+    container_name: luigi_wrapper
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./web:/app/web
+      - luigi_state:/var/luigi/state
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: luigi
+      POSTGRES_USER: luigi
+      POSTGRES_PASSWORD: luigipass
+      LOG_DIR: /app/logs
+      LUIGI_HOST: luigi_scheduler
+    depends_on:
+      - luigi
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: luigi
+      POSTGRES_USER: luigi
+      POSTGRES_PASSWORD: luigipass
+    ports:
+      - "5432:5432"
+    volumes:
+      - luigi_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  luigi_postgres_data:
+  luigi_state:
