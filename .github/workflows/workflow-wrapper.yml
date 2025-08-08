@@ -21,7 +21,7 @@ jobs:
       luigi-wrapper: ${{ steps.changes.outputs.luigi-wrapper }}
       shared: ${{ steps.changes.outputs.shared }}
       should-test: ${{ steps.should-test.outputs.result }}
-      should-build-deploy: ${{ steps.should-deploy.outputs.result }}
+      should-build-deploy: ${{ steps.should-build-deploy.outputs.result }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v2
@@ -58,8 +58,13 @@ jobs:
         id: should-build-deploy
         run: |
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/prod" ]]; then
-            echo "result=true" >> $GITHUB_OUTPUT
-            echo "🚀 Will build and deploy to prod"
+            if [[ "${{ steps.changes.outputs.luigi-wrapper }}" == "true" || "${{ steps.changes.outputs.shared }}" == "true" ]]; then
+              echo "result=true" >> $GITHUB_OUTPUT
+              echo "🚀 Will build and deploy to prod"
+            else
+              echo "result=false" >> $GITHUB_OUTPUT
+              echo "⏭️ No relevant changes, skipping build"
+            fi
           else
             echo "result=false" >> $GITHUB_OUTPUT
             echo "⏭️ Not prod push, skipping build/deploy"
