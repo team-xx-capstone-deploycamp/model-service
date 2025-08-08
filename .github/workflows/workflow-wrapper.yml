@@ -27,6 +27,7 @@ jobs:
       - uses: dorny/paths-filter@v2
         id: changes
         with:
+          base: ${{ github.base_ref || 'HEAD~1' }}
           filters: |
             luigi-wrapper:
               - '.github/workflows/workflow-wrapper.yml'
@@ -63,7 +64,7 @@ jobs:
               echo "🚀 Will build and deploy to prod"
             else
               echo "result=false" >> $GITHUB_OUTPUT
-              echo "⏭️ No relevant changes, skipping build"
+              echo "⏭️ No relevant changes, skipping build/deploy"
             fi
           else
             echo "result=false" >> $GITHUB_OUTPUT
