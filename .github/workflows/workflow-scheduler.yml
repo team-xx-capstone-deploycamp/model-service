@@ -24,9 +24,13 @@ jobs:
       should-build-deploy: ${{ steps.should-build-deploy.outputs.result }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: dorny/paths-filter@v2
         id: changes
         with:
+          base: ${{ github.base_ref || 'HEAD~1' }}
           filters: |
             luigi-scheduler:
               - '.github/workflows/workflow-scheduler.yml'
@@ -58,8 +62,13 @@ jobs:
         id: should-build-deploy
         run: |
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/prod" ]]; then
-            echo "result=true" >> $GITHUB_OUTPUT
-            echo "🚀 Will build and deploy to prod"
+            if [[ "${{ steps.changes.outputs.luigi-scheduler }}" == "true" || "${{ steps.changes.outputs.shared }}" == "true" ]]; then
+              echo "result=true" >> $GITHUB_OUTPUT
+              echo "🚀 Will build and deploy to prod"
+            else
+              echo "result=false" >> $GITHUB_OUTPUT
+              echo "⏭️ No relevant changes, skipping build/deploy"
+            fi
           else
             echo "result=false" >> $GITHUB_OUTPUT
             echo "⏭️ Not prod push, skipping build/deploy"
