@@ -1,11 +1,10 @@
 services:
   luigi:
-    build:
-      context: .
-      dockerfile: docker/luigi/Dockerfile
+    image: ${SCHEDULER_IMAGE_NAME}
     container_name: luigi_scheduler
-    ports:
-      - "8082:8082"
+    restart: unless-stopped
+    expose:
+      - 8082
     volumes:
       - ./src:/app/src
       - ./config/luigi.cfg:/app/config/luigi.cfg
@@ -20,12 +19,11 @@ services:
       - LUIGI_DB_PORT=${LUIGI_DB_PORT:-5432}
 
   wrapper:
-    build:
-      context: .
-      dockerfile: docker/wrapper/Dockerfile
+    image: ${WRAPPER_IMAGE_NAME}
     container_name: luigi_wrapper
-    ports:
-      - "5001:5000"
+    restart: unless-stopped
+    expose:
+      - 5000
     volumes:
       - ./web:/app/web
       - luigi_state:/var/luigi/state
