@@ -188,7 +188,7 @@ jobs:
           echo "LUIGI_DB_USER=${{ secrets.LUIGI_DB_USER || 'luigi' }}" >> .env.scheduler
           echo "LUIGI_DB_PASSWORD=${{ secrets.LUIGI_DB_PASSWORD || 'luigi123' }}" >> .env.scheduler
 
-          export $(cat .env.scheduler | xargs) && envsubst < docker/luigi/entrypoint.sh > docker/luigi/entrypoint.sh.tmp && mv docker/luigi/entrypoint.sh.tmp docker/luigi/entrypoint.sh"
+          export $(cat .env.scheduler | xargs) && envsubst < docker/luigi/entrypoint.sh > docker/luigi/entrypoint.sh.tmp && mv docker/luigi/entrypoint.sh.tmp docker/luigi/entrypoint.sh
 
 
       - name: Build and push Luigi Scheduler

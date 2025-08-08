@@ -59,7 +59,7 @@ jobs:
         run: |
           echo "Testing if dependencies can be resolved..."
           uv venv test-env
-          if uv pip install -r docker/luigi/requirements.txt --dry-run; then
+          if uv pip install -r docker/wrapper/requirements.txt --dry-run; then
             echo "✅ Dependencies can be resolved"
           else
             echo "❌ Dependency resolution failed - using fallback audit"
@@ -79,13 +79,13 @@ jobs:
       - name: Luigi Wrapper Dependency Scan
         uses: pypa/gh-action-pip-audit@v1.0.8
         with:
-          inputs: ${{ hashFiles('requirements-fallback.txt') && 'requirements-fallback.txt' || 'docker/luigi/requirements.txt' }}
+          inputs: ${{ hashFiles('requirements-fallback.txt') && 'requirements-fallback.txt' || 'docker/wrapper/requirements.txt' }}
           continue-on-error: true
 
       - name: Luigi Wrapper Dockerfile Lint
         uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfile: docker/luigi/Dockerfile
+          dockerfile: docker/wrapper/Dockerfile
 
   luigi-wrapper-test:
     runs-on: ubuntu-latest
@@ -108,7 +108,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.cache/uv
-          key: uv-${{ runner.os }}-${{ hashFiles('docker/luigi/requirements.txt') }}
+          key: uv-${{ runner.os }}-${{ hashFiles('docker/wrapper/requirements.txt') }}
           restore-keys: |
             uv-${{ runner.os }}-
 
@@ -121,9 +121,9 @@ jobs:
 
       - name: Install project dependencies
         run: |
-          if [ -f docker/luigi/requirements.txt ]; then 
-          echo "Installing from docker/luigi/requirements.txt"
-          uv pip install -r docker/luigi/requirements.txt
+          if [ -f docker/wrapper/requirements.txt ]; then 
+          echo "Installing from docker/wrapper/requirements.txt"
+          uv pip install -r docker/wrapper/requirements.txt
           else
           echo "Warning: requirements.txt not found"
           exit 1
@@ -183,8 +183,8 @@ jobs:
         id: build
         uses: docker/build-push-action@v5
         with:
-          context: ./docker/luigi
-          file: ./docker/luigi/Dockerfile
+          context: ./docker/wrapper
+          file: ./docker/wrapper/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
