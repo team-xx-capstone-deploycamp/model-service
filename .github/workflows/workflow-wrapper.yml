@@ -18,16 +18,31 @@ jobs:
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      luigi-wrapper: ${{ steps.changes.outputs.luigi-wrapper }}
-      shared: ${{ steps.changes.outputs.shared }}
       should-test: ${{ steps.should-test.outputs.result }}
       should-build-deploy: ${{ steps.should-build-deploy.outputs.result }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: dorny/paths-filter@v2
         id: changes
         with:
-          base: ${{ github.base_ref || 'HEAD~1' }}
+          filters: |
+            luigi-wrapper:
+              - '.github/workflows/workflow-wrapper.yml'
+              - 'docker/wrapper/**'
+              - 'web/**'
+            shared:
+              - 'shared/**'
+              - 'pyproject.toml'
+              - 'setup.py'
+
+      - uses: dorny/paths-filter@v2
+        id: changes-pr
+        with:
+          base: ${{ github.event.pull_request.base.sha || github.event.before }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           filters: |
             luigi-wrapper:
               - '.github/workflows/workflow-wrapper.yml'
@@ -59,7 +74,7 @@ jobs:
         id: should-build-deploy
         run: |
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/prod" ]]; then
-            if [[ "${{ steps.changes.outputs.luigi-wrapper }}" == "true" || "${{ steps.changes.outputs.shared }}" == "true" ]]; then
+            if [[ "${{ steps.changes-pr.outputs.luigi-wrapper }}" == "true" || "${{ steps.changes-pr.outputs.shared }}" == "true" ]]; then
               echo "result=true" >> $GITHUB_OUTPUT
               echo "🚀 Will build and deploy to prod"
             else
