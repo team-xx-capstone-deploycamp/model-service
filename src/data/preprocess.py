@@ -5,11 +5,16 @@ from sklearn.datasets import load_wine, load_breast_cancer, make_classification
 
 def generate_synthetic_data(n_samples=1000, n_features=20, random_state=42):
     """Generate synthetic classification dataset"""
+    # Ensure n_informative + n_redundant <= n_features
+    n_informative = min(10, n_features - 2)
+    n_redundant = min(5, n_features - n_informative)
+
     X, y = make_classification(
         n_samples=n_samples,
         n_features=n_features,
-        n_informative=10,
-        n_redundant=5,
+        n_informative=n_informative,
+        n_redundant=n_redundant,
+        n_clusters_per_class=1,  # Add this for stability
         random_state=random_state
     )
 
