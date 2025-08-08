@@ -1,0 +1,183 @@
+name: CI/CD Pipeline
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  BASE_IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      luigi-scheduler: ${{ steps.changes.outputs.luigi-scheduler }}
+      luigi-wrapper: ${{ steps.changes.outputs.luigi-wrapper }}
+      shared: ${{ steps.changes.outputs.shared }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: changes
+        with:
+          filters: |
+            luigi-scheduler:
+              - 'docker/luigi/**'
+              - 'docker/luigi/requirements.txt'
+              - 'docker/luigi/Dockerfile'
+              - 'src/**'
+            luigi-wrapper:
+              - 'docker/wrapper/**'
+              - 'docker/wrapper/requirements.txt'
+              - 'docker/wrapper/Dockerfile'
+              - 'web/**'
+            shared:
+              - 'shared/**'
+              - '.github/workflows/**'
+              - 'pyproject.toml'
+              - 'setup.py'
+
+  luigi-scheduler-quality:
+    runs-on: ubuntu-latest
+    name: Luigi Scheduler - Code Quality
+    if: needs.detect-changes.outputs.luigi-scheduler == 'true' || needs.detect-changes.outputs.shared == 'true' || github.event_name == 'pull_request'
+    needs: detect-changes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Luigi Scheduler Dependency Scan
+        uses: pypa/gh-action-pip-audit@v1.0.8
+        with:
+          inputs: docker/luigi/requirements.txt
+
+      - name: Luigi Scheduler Dockerfile Lint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/luigi/Dockerfile
+
+  luigi-scheduler-test:
+    runs-on: ubuntu-latest
+    name: Luigi Scheduler - Tests
+    needs: luigi-scheduler-quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov
+          if [ -f docker/luigi/requirements.txt ]; then pip install -r docker/luigi/requirements.txt; fi
+
+      - name: Run Luigi Scheduler Tests
+        run: |
+          cd src
+          pytest --cov=. --cov-report=xml --cov-report=term
+          mv coverage.xml ../luigi-scheduler-coverage.xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./luigi-scheduler-coverage.xml
+          flags: luigi-scheduler
+
+  luigi-scheduler-build:
+    runs-on: ubuntu-latest
+    name: Luigi Scheduler - Build
+    needs: luigi-scheduler-test
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}/luigi-scheduler
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+
+      - name: Build and push Luigi Scheduler
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docker/luigi
+          file: ./docker/luigi/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=luigi-scheduler
+          cache-to: type=gha,mode=max,scope=luigi-scheduler
+
+  sonarcloud-analysis:
+    runs-on: ubuntu-latest
+    name: SonarCloud Analysis
+    needs: [ luigi-scheduler-test ]
+    if: always() && needs.luigi-scheduler-test.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Download coverage reports
+      - name: Download coverage reports
+        uses: actions/download-artifact@v3
+        continue-on-error: true
+        with:
+          name: coverage-reports
+          path: ./coverage/
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  security-scan:
+    runs-on: ubuntu-latest
+    name: Security Scan
+    needs: [ luigi-scheduler-build ]
+    if: always() && needs.luigi-scheduler-build.result == 'success'
+    strategy:
+      matrix:
+        service: [ luigi-scheduler ]
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}/${{ matrix.service }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-${{ matrix.service }}-results.sarif'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-${{ matrix.service }}-results.sarif'
