@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       luigi-wrapper: ${{ steps.changes.outputs.luigi-wrapper }}
+      shared: ${{ steps.changes.outputs.shared }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v2
@@ -38,7 +39,7 @@ jobs:
 
   luigi-wrapper-quality:
     runs-on: ubuntu-latest
-    name: Luigi Scheduler - Code Quality
+    name: Luigi Wrapper - Code Quality
     if: needs.detect-changes.outputs.luigi-wrapper == 'true' || needs.detect-changes.outputs.shared == 'true' || github.event_name == 'pull_request'
     needs: detect-changes
     steps:
@@ -75,20 +76,20 @@ jobs:
           EOF
           fi
 
-      - name: Luigi Scheduler Dependency Scan
+      - name: Luigi Wrapper Dependency Scan
         uses: pypa/gh-action-pip-audit@v1.0.8
         with:
           inputs: ${{ hashFiles('requirements-fallback.txt') && 'requirements-fallback.txt' || 'docker/luigi/requirements.txt' }}
           continue-on-error: true
 
-      - name: Luigi Scheduler Dockerfile Lint
+      - name: Luigi Wrapper Dockerfile Lint
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: docker/luigi/Dockerfile
 
   luigi-wrapper-test:
     runs-on: ubuntu-latest
-    name: Luigi Scheduler - Tests
+    name: Luigi Wrapper - Tests
     needs: luigi-wrapper-quality
     steps:
       - uses: actions/checkout@v4
@@ -132,9 +133,9 @@ jobs:
         run: |
           uv pip list
 
-      - name: Run Luigi Scheduler Tests
+      - name: Run Luigi Wrapper Tests
         run: |
-          cd src
+          cd web
           source ../.venv/bin/activate
           pytest --cov=. --cov-report=xml --cov-report=term --verbose
           mv coverage.xml ../luigi-wrapper-coverage.xml
@@ -147,7 +148,7 @@ jobs:
 
   luigi-wrapper-build:
     runs-on: ubuntu-latest
-    name: Luigi Scheduler - Build
+    name: Luigi Wrapper - Build
     needs: luigi-wrapper-test
     permissions:
       contents: read
@@ -178,7 +179,7 @@ jobs:
             type=ref,event=pr
             type=sha
 
-      - name: Build and push Luigi Scheduler
+      - name: Build and push Luigi Wrapper
         id: build
         uses: docker/build-push-action@v5
         with:
@@ -224,6 +225,9 @@ jobs:
       security-events: write
       actions: read
       packages: read
+    outputs:
+      image-name: ${{ needs.luigi-wrapper-build.outputs.image-name }}
+      image-digest: ${{ needs.luigi-wrapper-build.outputs.image-digest }}
     strategy:
       matrix:
         service: [ luigi-wrapper ]
@@ -277,9 +281,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: security-scan
+    if: github.ref == 'refs/heads/prod'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.7.0
@@ -289,7 +294,7 @@ jobs:
       - name: Set image reference
         id: image-ref
         run: |
-          IMAGE_REF="${{ needs.luigi-wrapper-build.outputs.image-name }}@${{ needs.luigi-wrapper-build.outputs.image-digest }}"
+          IMAGE_REF="${{ needs.security-scan.outputs.image-name }}@${{ needs.security-scan.outputs.image-digest }}"
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
           echo "Using image reference: ${IMAGE_REF}"
 
@@ -305,6 +310,7 @@ jobs:
           echo "LUIGI_DB_USER=${{ secrets.LUIGI_DB_USER || 'luigi' }}" >> .env.wrapper
           echo "LUIGI_DB_PASSWORD=${{ secrets.LUIGI_DB_PASSWORD || 'luigi123' }}" >> .env.wrapper
           echo "WRAPPER_IMAGE_NAME=${{ steps.image-ref.outputs.image-ref }}" >> .env.wrapper
+          echo "SCHEDULER_IMAGE_NAME=alpine:latest" >> .env.wrapper
 
       - name: Copy files to VPS
         run: |

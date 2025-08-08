@@ -38,8 +38,6 @@ services:
       - LUIGI_DB_PORT=${LUIGI_DB_PORT:-5432}
       - LOG_DIR=/app/logs
       - LUIGI_HOST=luigi_scheduler
-    depends_on:
-      - luigi
 
 volumes:
   luigi_state:

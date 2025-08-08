@@ -1,6 +1,6 @@
 #!/bin/bash
 
-until PGPASSWORD=${PASS} psql -h ${HOST} -U ${USER} -d ${DB} -c '\q'; do
+until PGPASSWORD=${LUIGI_DB_PASSWORD} psql -h ${LUIGI_DB_HOST} -U ${LUIGI_DB_USER} -d ${LUIGI_DB_NAME} -c '\q'; do
   echo "Postgres is unavailable - sleeping"
   sleep 1
 done
