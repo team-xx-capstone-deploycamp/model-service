@@ -29,13 +29,11 @@ jobs:
         with:
           filters: |
             luigi-wrapper:
+              - '.github/workflows/workflow-wrapper.yml'
               - 'docker/wrapper/**'
-              - 'docker/wrapper/requirements.txt'
-              - 'docker/wrapper/Dockerfile'
               - 'web/**'
             shared:
               - 'shared/**'
-              - '.github/workflows/**'
               - 'pyproject.toml'
               - 'setup.py'
       - name: Determine if should test
