@@ -8,11 +8,11 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY docker/luigi/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy entrypoint script
-COPY docker/luigi/entrypoint.sh /entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 8082
