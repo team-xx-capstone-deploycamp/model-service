@@ -1,0 +1,336 @@
+name: CI/CD Pipeline For Luigi Wrapper
+on:
+  push:
+    branches:
+      - main
+      - prod
+  pull_request:
+    branches:
+      - prod
+    types: [opened, synchronize]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  BASE_IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      luigi-wrapper: ${{ steps.changes.outputs.luigi-wrapper }}
+      shared: ${{ steps.changes.outputs.shared }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: changes
+        with:
+          filters: |
+            luigi-wrapper:
+              - 'docker/wrapper/**'
+              - 'docker/wrapper/requirements.txt'
+              - 'docker/wrapper/Dockerfile'
+              - 'web/**'
+            shared:
+              - 'shared/**'
+              - '.github/workflows/**'
+              - 'pyproject.toml'
+              - 'setup.py'
+
+  luigi-wrapper-quality:
+    runs-on: ubuntu-latest
+    name: Luigi Wrapper - Code Quality
+    if: needs.detect-changes.outputs.luigi-wrapper == 'true' || needs.detect-changes.outputs.shared == 'true' || github.event_name == 'pull_request'
+    needs: detect-changes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Test dependency resolution
+        run: |
+          echo "Testing if dependencies can be resolved..."
+          uv venv test-env
+          if uv pip install -r docker/wrapper/requirements.txt --dry-run; then
+            echo "✅ Dependencies can be resolved"
+          else
+            echo "❌ Dependency resolution failed - using fallback audit"
+            # Create a fallback requirements file for audit
+            cat > requirements-fallback.txt << EOF
+          luigi==3.6.0
+          psycopg2-binary==2.9.10
+          sqlalchemy==2.0.42
+          python-dotenv==1.1.1
+          pandas>=2.2.3
+          numpy>=1.24.4
+          scikit-learn>=1.4.0
+          mlflow==3.1.4
+          EOF
+          fi
+
+      - name: Luigi Wrapper Dependency Scan
+        uses: pypa/gh-action-pip-audit@v1.0.8
+        with:
+          inputs: ${{ hashFiles('requirements-fallback.txt') && 'requirements-fallback.txt' || 'docker/wrapper/requirements.txt' }}
+          continue-on-error: true
+
+      - name: Luigi Wrapper Dockerfile Lint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/wrapper/Dockerfile
+
+  luigi-wrapper-test:
+    runs-on: ubuntu-latest
+    name: Luigi Wrapper - Tests
+    needs: luigi-wrapper-quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Cache uv dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('docker/wrapper/requirements.txt') }}
+          restore-keys: |
+            uv-${{ runner.os }}-
+
+      - name: Create virtual environment
+        run: uv venv .venv
+
+      - name: Install test dependencies
+        run: |
+          uv pip install pytest pytest-cov
+
+      - name: Install project dependencies
+        run: |
+          if [ -f docker/wrapper/requirements.txt ]; then 
+          echo "Installing from docker/wrapper/requirements.txt"
+          uv pip install -r docker/wrapper/requirements.txt
+          else
+          echo "Warning: requirements.txt not found"
+          exit 1
+          fi
+
+      - name: Verify installation
+        run: |
+          uv pip list
+
+      - name: Run Luigi Wrapper Tests
+        run: |
+          cd web
+          source ../.venv/bin/activate
+          pytest --cov=. --cov-report=xml --cov-report=term --verbose
+          mv coverage.xml ../luigi-wrapper-coverage.xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./luigi-wrapper-coverage.xml
+          flags: luigi-wrapper
+
+  luigi-wrapper-build:
+    runs-on: ubuntu-latest
+    name: Luigi Wrapper - Build
+    needs: luigi-wrapper-test
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-name: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}/luigi-wrapper
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}/luigi-wrapper
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+
+      - name: Build and push Luigi Wrapper
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docker/wrapper
+          file: ./docker/wrapper/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=luigi-wrapper
+          cache-to: type=gha,mode=max,scope=luigi-wrapper
+
+  sonarcloud-analysis:
+    runs-on: ubuntu-latest
+    name: SonarCloud Analysis
+    needs: [ luigi-wrapper-test ]
+    if: always() && needs.luigi-wrapper-test.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Download coverage reports
+      - name: Download coverage reports
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: coverage-reports
+          path: ./coverage/
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  security-scan:
+    runs-on: ubuntu-latest
+    name: Security Scan
+    needs: [ luigi-wrapper-build ]
+    if: always() && needs.luigi-wrapper-build.result == 'success'
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    outputs:
+      image-name: ${{ needs.luigi-wrapper-build.outputs.image-name }}
+      image-digest: ${{ needs.luigi-wrapper-build.outputs.image-digest }}
+    strategy:
+      matrix:
+        service: [ luigi-wrapper ]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image reference
+        id: image-ref
+        run: |
+          # Use image digest for exact reference to the built image
+          IMAGE_REF="${{ needs.luigi-wrapper-build.outputs.image-name }}@${{ needs.luigi-wrapper-build.outputs.image-digest }}"
+          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+          echo "Using image reference: ${IMAGE_REF}"
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image-ref.outputs.image-ref }}
+          format: 'sarif'
+          output: 'trivy-${{ matrix.service }}-results.sarif'
+          skip-files: '/usr/local/bundle/gems/**'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Check if SARIF file exists
+        id: check-sarif
+        run: |
+          if [ -f "trivy-${{ matrix.service }}-results.sarif" ]; then
+            echo "sarif-exists=true" >> $GITHUB_OUTPUT
+            echo "SARIF file found"
+          else
+            echo "sarif-exists=false" >> $GITHUB_OUTPUT
+            echo "SARIF file not found"
+          fi
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && steps.check-sarif.outputs.sarif-exists == 'true'
+        with:
+          sarif_file: 'trivy-${{ matrix.service }}-results.sarif'
+          category: 'trivy-${{ matrix.service }}'
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: security-scan
+    if: github.ref == 'refs/heads/prod'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Set image reference
+        id: image-ref
+        run: |
+          IMAGE_REF="${{ needs.security-scan.outputs.image-name }}@${{ needs.security-scan.outputs.image-digest }}"
+          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+          echo "Using image reference: ${IMAGE_REF}"
+
+      - name: Set up environment variables from secrets
+        run: |
+          echo "Setting up environment variables from secrets"
+          echo "FLASK_SECRET_KEY=${{ secrets.FLASK_SECRET_KEY || 'minioadmin' }}" >> .env.wrapper
+          echo "FLASK_ADMIN_USERNAME=${{ secrets.FLASK_ADMIN_USERNAME || 'admin' }}" >> .env.wrapper
+          echo "FLASK_ADMIN_PASSWORD=${{ secrets.FLASK_ADMIN_PASSWORD || 'admin123' }}" >> .env.wrapper
+          echo "LUIGI_DB_HOST=${{ secrets.LUIGI_DB_HOST || 'postgres' }}" >> .env.wrapper
+          echo "LUIGI_DB_PORT=${{ secrets.LUIGI_DB_PORT || '5432' }}" >> .env.wrapper
+          echo "LUIGI_DB_NAME=${{ secrets.LUIGI_DB_NAME || 'luigidb' }}" >> .env.wrapper
+          echo "LUIGI_DB_USER=${{ secrets.LUIGI_DB_USER || 'luigi' }}" >> .env.wrapper
+          echo "LUIGI_DB_PASSWORD=${{ secrets.LUIGI_DB_PASSWORD || 'luigi123' }}" >> .env.wrapper
+          echo "WRAPPER_IMAGE_NAME=${{ steps.image-ref.outputs.image-ref }}" >> .env.wrapper
+          echo "SCHEDULER_IMAGE_NAME=alpine:latest" >> .env.wrapper
+
+      - name: Copy files to VPS
+        run: |
+          # Add VPS host to known hosts
+          mkdir -p ~/.ssh
+          ssh-keyscan ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+          # Create necessary directories on VPS
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/web"
+
+          # Copy files to VPS
+          scp -r docker-compose.yml .env.wrapper ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/
+          scp -r web/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/web
+
+      - name: Update Image
+        run: |
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.wrapper | xargs) && envsubst < docker-compose.yml > docker-compose.wrapper.yml"
+
+
+      - name: Deploy Base Services on VPS
+        run: |
+          echo "Deploying service wrapper on VPS"
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && docker compose -f docker-compose.wrapper.yml --env-file .env.wrapper up -d wrapper"
