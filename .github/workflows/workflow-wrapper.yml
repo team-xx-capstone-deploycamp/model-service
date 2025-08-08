@@ -1,12 +1,13 @@
-name: CI/CD Pipeline
+name: CI/CD Pipeline For Luigi Wrapper
 on:
   push:
     branches:
       - main
-      - develop
+      - prod
   pull_request:
     branches:
-      - main
+      - prod
+    types: [opened, synchronize]
 
 env:
   REGISTRY: ghcr.io
@@ -17,20 +18,13 @@ jobs:
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      luigi-scheduler: ${{ steps.changes.outputs.luigi-scheduler }}
       luigi-wrapper: ${{ steps.changes.outputs.luigi-wrapper }}
-      shared: ${{ steps.changes.outputs.shared }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v2
         id: changes
         with:
           filters: |
-            luigi-scheduler:
-              - 'docker/luigi/**'
-              - 'docker/luigi/requirements.txt'
-              - 'docker/luigi/Dockerfile'
-              - 'src/**'
             luigi-wrapper:
               - 'docker/wrapper/**'
               - 'docker/wrapper/requirements.txt'
@@ -42,10 +36,10 @@ jobs:
               - 'pyproject.toml'
               - 'setup.py'
 
-  luigi-scheduler-quality:
+  luigi-wrapper-quality:
     runs-on: ubuntu-latest
     name: Luigi Scheduler - Code Quality
-    if: needs.detect-changes.outputs.luigi-scheduler == 'true' || needs.detect-changes.outputs.shared == 'true' || github.event_name == 'pull_request'
+    if: needs.detect-changes.outputs.luigi-wrapper == 'true' || needs.detect-changes.outputs.shared == 'true' || github.event_name == 'pull_request'
     needs: detect-changes
     steps:
       - uses: actions/checkout@v4
@@ -92,10 +86,10 @@ jobs:
         with:
           dockerfile: docker/luigi/Dockerfile
 
-  luigi-scheduler-test:
+  luigi-wrapper-test:
     runs-on: ubuntu-latest
     name: Luigi Scheduler - Tests
-    needs: luigi-scheduler-quality
+    needs: luigi-wrapper-quality
     steps:
       - uses: actions/checkout@v4
 
@@ -143,24 +137,24 @@ jobs:
           cd src
           source ../.venv/bin/activate
           pytest --cov=. --cov-report=xml --cov-report=term --verbose
-          mv coverage.xml ../luigi-scheduler-coverage.xml
+          mv coverage.xml ../luigi-wrapper-coverage.xml
 
       - name: Upload coverage
         uses: codecov/codecov-action@v3
         with:
-          file: ./luigi-scheduler-coverage.xml
-          flags: luigi-scheduler
+          file: ./luigi-wrapper-coverage.xml
+          flags: luigi-wrapper
 
-  luigi-scheduler-build:
+  luigi-wrapper-build:
     runs-on: ubuntu-latest
     name: Luigi Scheduler - Build
-    needs: luigi-scheduler-test
+    needs: luigi-wrapper-test
     permissions:
       contents: read
       packages: write
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
-      image-name: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}/luigi-scheduler
+      image-name: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}/luigi-wrapper
     steps:
       - uses: actions/checkout@v4
 
@@ -178,7 +172,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}/luigi-scheduler
+          images: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}/luigi-wrapper
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -193,14 +187,14 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=luigi-scheduler
-          cache-to: type=gha,mode=max,scope=luigi-scheduler
+          cache-from: type=gha,scope=luigi-wrapper
+          cache-to: type=gha,mode=max,scope=luigi-wrapper
 
   sonarcloud-analysis:
     runs-on: ubuntu-latest
     name: SonarCloud Analysis
-    needs: [ luigi-scheduler-test ]
-    if: always() && needs.luigi-scheduler-test.result == 'success'
+    needs: [ luigi-wrapper-test ]
+    if: always() && needs.luigi-wrapper-test.result == 'success'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -223,8 +217,8 @@ jobs:
   security-scan:
     runs-on: ubuntu-latest
     name: Security Scan
-    needs: [ luigi-scheduler-build ]
-    if: always() && needs.luigi-scheduler-build.result == 'success'
+    needs: [ luigi-wrapper-build ]
+    if: always() && needs.luigi-wrapper-build.result == 'success'
     permissions:
       contents: read
       security-events: write
@@ -232,7 +226,7 @@ jobs:
       packages: read
     strategy:
       matrix:
-        service: [ luigi-scheduler ]
+        service: [ luigi-wrapper ]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -248,7 +242,7 @@ jobs:
         id: image-ref
         run: |
           # Use image digest for exact reference to the built image
-          IMAGE_REF="${{ needs.luigi-scheduler-build.outputs.image-name }}@${{ needs.luigi-scheduler-build.outputs.image-digest }}"
+          IMAGE_REF="${{ needs.luigi-wrapper-build.outputs.image-name }}@${{ needs.luigi-wrapper-build.outputs.image-digest }}"
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
           echo "Using image reference: ${IMAGE_REF}"
 
@@ -279,3 +273,58 @@ jobs:
         with:
           sarif_file: 'trivy-${{ matrix.service }}-results.sarif'
           category: 'trivy-${{ matrix.service }}'
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: security-scan
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Set image reference
+        id: image-ref
+        run: |
+          IMAGE_REF="${{ needs.luigi-wrapper-build.outputs.image-name }}@${{ needs.luigi-wrapper-build.outputs.image-digest }}"
+          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+          echo "Using image reference: ${IMAGE_REF}"
+
+      - name: Set up environment variables from secrets
+        run: |
+          echo "Setting up environment variables from secrets"
+          echo "FLASK_SECRET_KEY=${{ secrets.FLASK_SECRET_KEY || 'minioadmin' }}" >> .env.wrapper
+          echo "FLASK_ADMIN_USERNAME=${{ secrets.FLASK_ADMIN_USERNAME || 'admin' }}" >> .env.wrapper
+          echo "FLASK_ADMIN_PASSWORD=${{ secrets.FLASK_ADMIN_PASSWORD || 'admin123' }}" >> .env.wrapper
+          echo "LUIGI_DB_HOST=${{ secrets.LUIGI_DB_HOST || 'postgres' }}" >> .env.wrapper
+          echo "LUIGI_DB_PORT=${{ secrets.LUIGI_DB_PORT || '5432' }}" >> .env.wrapper
+          echo "LUIGI_DB_NAME=${{ secrets.LUIGI_DB_NAME || 'luigidb' }}" >> .env.wrapper
+          echo "LUIGI_DB_USER=${{ secrets.LUIGI_DB_USER || 'luigi' }}" >> .env.wrapper
+          echo "LUIGI_DB_PASSWORD=${{ secrets.LUIGI_DB_PASSWORD || 'luigi123' }}" >> .env.wrapper
+          echo "WRAPPER_IMAGE_NAME=${{ steps.image-ref.outputs.image-ref }}" >> .env.wrapper
+
+      - name: Copy files to VPS
+        run: |
+          # Add VPS host to known hosts
+          mkdir -p ~/.ssh
+          ssh-keyscan ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+          # Create necessary directories on VPS
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/web"
+
+          # Copy files to VPS
+          scp -r docker-compose.yml .env.wrapper ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/
+          scp -r web/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/web
+
+      - name: Update Image
+        run: |
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.wrapper | xargs) && envsubst < docker-compose.yml > docker-compose.wrapper.yml"
+
+
+      - name: Deploy Base Services on VPS
+        run: |
+          echo "Deploying service wrapper on VPS"
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && docker compose -f docker-compose.wrapper.yml --env-file .env.wrapper up -d wrapper"
