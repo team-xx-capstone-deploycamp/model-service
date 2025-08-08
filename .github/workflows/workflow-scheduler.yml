@@ -21,7 +21,7 @@ jobs:
       luigi-scheduler: ${{ steps.changes.outputs.luigi-scheduler }}
       shared: ${{ steps.changes.outputs.shared }}
       should-test: ${{ steps.should-test.outputs.result }}
-      should-deploy: ${{ steps.should-deploy.outputs.result }}
+      should-build-deploy: ${{ steps.should-build-deploy.outputs.result }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v2
@@ -29,37 +29,48 @@ jobs:
         with:
           filters: |
             luigi-scheduler:
+              - '.github/workflows/workflow-scheduler.yml'
               - 'docker/luigi/**'
               - 'docker/luigi/requirements.txt'
               - 'docker/luigi/Dockerfile'
               - 'src/**'
             shared:
               - 'shared/**'
-              - '.github/workflows/**'
               - 'pyproject.toml'
               - 'setup.py'
-      - name: Determine if should test
+
+      - name: Should run tests
         id: should-test
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            # Always test in PRs if files changed
+            # Test in PRs if files changed
             if [[ "${{ steps.changes.outputs.luigi-scheduler }}" == "true" || "${{ steps.changes.outputs.shared }}" == "true" ]]; then
               echo "result=true" >> $GITHUB_OUTPUT
+              echo "🧪 Will run tests for PR"
             else
               echo "result=false" >> $GITHUB_OUTPUT
+              echo "⏭️ No relevant changes, skipping tests"
             fi
           else
-            # Skip tests on push to prod (merge), we'll use PR artifacts
             echo "result=false" >> $GITHUB_OUTPUT
+            echo "⏭️ Not a PR, skipping tests"
           fi
 
-      - name: Determine if should deploy
-        id: should-deploy
+      - name: Should build and deploy
+        id: should-build-deploy
         run: |
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/prod" ]]; then
-            echo "result=true" >> $GITHUB_OUTPUT
+            # Build and deploy on prod push
+            if [[ "${{ steps.changes.outputs.luigi-scheduler }}" == "true" || "${{ steps.changes.outputs.shared }}" == "true" ]]; then
+              echo "result=true" >> $GITHUB_OUTPUT
+              echo "🚀 Will build and deploy to prod"
+            else
+              echo "result=false" >> $GITHUB_OUTPUT
+              echo "⏭️ No relevant changes, skipping build/deploy"
+            fi
           else
             echo "result=false" >> $GITHUB_OUTPUT
+            echo "⏭️ Not prod push, skipping build/deploy"
           fi
 
   luigi-scheduler-quality:
@@ -172,18 +183,41 @@ jobs:
           file: ./luigi-scheduler-coverage.xml
           flags: luigi-scheduler
 
+  sonarcloud-analysis:
+    runs-on: ubuntu-latest
+    name: SonarCloud Analysis
+    needs: [ luigi-scheduler-test ]
+    if: needs.detect-changes.outputs.should-test == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Download coverage reports
+      - name: Download coverage reports
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: coverage-reports
+          path: ./coverage/
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
   luigi-scheduler-build:
     runs-on: ubuntu-latest
     name: Luigi Scheduler - Build
-    if: needs.detect-changes.outputs.should-test == 'true'
-    needs: luigi-scheduler-test
+    if: needs.detect-changes.outputs.should-build-deploy == 'true'
+    needs: detect-changes
     permissions:
       contents: read
       packages: write
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
       image-name: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}/luigi-scheduler
-      image-tag: ${{ steps.extract-tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -245,35 +279,11 @@ jobs:
           cache-from: type=gha,scope=luigi-scheduler
           cache-to: type=gha,mode=max,scope=luigi-scheduler
 
-  sonarcloud-analysis:
-    runs-on: ubuntu-latest
-    name: SonarCloud Analysis
-    needs: [ luigi-scheduler-test ]
-    if: always() && needs.luigi-scheduler-test.result == 'success'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # Download coverage reports
-      - name: Download coverage reports
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: coverage-reports
-          path: ./coverage/
-
-      - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@v5
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
   security-scan:
     runs-on: ubuntu-latest
     name: Security Scan
     needs: [ luigi-scheduler-build ]
-    if: needs.detect-changes.outputs.should-test == 'true'
+    if: needs.detect-changes.outputs.should-build-deploy == 'true'
     permissions:
       contents: read
       security-events: write
@@ -282,7 +292,6 @@ jobs:
     outputs:
       image-name: ${{ needs.luigi-scheduler-build.outputs.image-name }}
       image-digest: ${{ needs.luigi-scheduler-build.outputs.image-digest }}
-      image-tag: ${{ needs.luigi-scheduler-build.outputs.image-tag }}
     strategy:
       matrix:
         service: [ luigi-scheduler ]
@@ -333,21 +342,10 @@ jobs:
           sarif_file: 'trivy-${{ matrix.service }}-results.sarif'
           category: 'trivy-${{ matrix.service }}'
 
-  store-image-info:
-    runs-on: ubuntu-latest
-    name: Store Image Info
-    if: needs.detect-changes.outputs.should-test == 'true'
-    needs: [ security-scan ]
-    steps:
-      - name: Store image reference
-        run: |
-          echo "Image built and tested: ${{ needs.security-scan.outputs.image-name }}@${{ needs.security-scan.outputs.image-digest }}"
-          echo "Tag: ${{ needs.security-scan.outputs.image-tag }}"
-
   deploy:
     runs-on: ubuntu-latest
-    needs: detect-changes
-    if: needs.detect-changes.outputs.should-deploy == 'true'
+    needs: [security-scan]
+    if: needs.detect-changes.outputs.should-build-deploy == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -357,18 +355,12 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Get latest tested image
-        id: get-image
+      - name: Set image reference
+        id: image-ref
         run: |
-          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}/luigi-scheduler:sha-${{ github.sha }}"
-
-          echo "image-tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "Deploying image: ${IMAGE_TAG}"
-
-      - name: Verify image exists
-        run: |
-          docker manifest inspect ${{ steps.get-image.outputs.image-tag }} > /dev/null
-          echo "✅ Image verified: ${{ steps.get-image.outputs.image-tag }}"
+          IMAGE_REF="${{ needs.security-scan.outputs.image-name }}@${{ needs.security-scan.outputs.image-digest }}"
+          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+          echo "Deploying image: ${IMAGE_REF}"
 
       - name: Set up environment variables from secrets
         run: |
