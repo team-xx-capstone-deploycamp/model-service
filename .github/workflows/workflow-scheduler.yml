@@ -18,10 +18,9 @@ jobs:
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      luigi-scheduler: ${{ steps.changes.outputs.luigi-scheduler }}
-      shared: ${{ steps.changes.outputs.shared }}
       should-test: ${{ steps.should-test.outputs.result }}
       should-build-deploy: ${{ steps.should-build-deploy.outputs.result }}
+      should-rebuild: ${{ steps.should-build-deploy.outputs.rebuild }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,12 +29,38 @@ jobs:
       - uses: dorny/paths-filter@v2
         id: changes
         with:
-          base: ${{ github.base_ref || 'HEAD~1' }}
           filters: |
             luigi-scheduler:
               - '.github/workflows/workflow-scheduler.yml'
-              - 'docker/luigi/**'
+            python-packages:
+              - 'docker/luigi/**/*.py'
+              - 'docker/luigi/**/requirements.txt'
+              - 'docker/luigi/**/setup.py'
+              - 'docker/luigi/**/pyproject.toml'
+            src-changes:
               - 'src/**'
+            shared:
+              - 'shared/**'
+              - 'pyproject.toml'
+              - 'setup.py'
+
+      - uses: dorny/paths-filter@v2
+        id: changes-pr
+        with:
+          base: ${{ github.event.pull_request.base.sha || github.event.before }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          filters: |
+            luigi-scheduler:
+              - '.github/workflows/workflow-scheduler.yml'
+            python-packages:
+              - 'docker/luigi/**/*.py'
+              - 'docker/luigi/**/requirements.txt'
+              - 'docker/luigi/**/setup.py'
+              - 'docker/luigi/**/pyproject.toml'
+            src-changes:
+              - 'src/**'
+              - '.dvc/**'
+              - 'data/**'
             shared:
               - 'shared/**'
               - 'pyproject.toml'
@@ -62,15 +87,24 @@ jobs:
         id: should-build-deploy
         run: |
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/prod" ]]; then
-            if [[ "${{ steps.changes.outputs.luigi-scheduler }}" == "true" || "${{ steps.changes.outputs.shared }}" == "true" ]]; then
+            # Check if Python packages in docker/luigi have changed
+            if [[ "${{ steps.changes-pr.outputs.python-packages }}" == "true" || "${{ steps.changes-pr.outputs.luigi-scheduler }}" == "true" || "${{ steps.changes-pr.outputs.shared }}" == "true" ]]; then
               echo "result=true" >> $GITHUB_OUTPUT
-              echo "🚀 Will build and deploy to prod"
+              echo "rebuild=true" >> $GITHUB_OUTPUT
+              echo "🚀 Will rebuild and deploy to prod"
+            # Check if only src files have changed
+            elif [[ "${{ steps.changes-pr.outputs.src-changes }}" == "true" ]]; then
+              echo "result=true" >> $GITHUB_OUTPUT
+              echo "rebuild=false" >> $GITHUB_OUTPUT
+              echo "📄 Will copy src files and restart service"
             else
               echo "result=false" >> $GITHUB_OUTPUT
+              echo "rebuild=false" >> $GITHUB_OUTPUT
               echo "⏭️ No relevant changes, skipping build/deploy"
             fi
           else
             echo "result=false" >> $GITHUB_OUTPUT
+            echo "rebuild=false" >> $GITHUB_OUTPUT
             echo "⏭️ Not prod push, skipping build/deploy"
           fi
 
@@ -346,7 +380,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    needs: [security-scan]
+    needs: [security-scan, detect-changes]
     if: needs.detect-changes.outputs.should-build-deploy == 'true'
     steps:
       - name: Checkout code
@@ -359,6 +393,7 @@ jobs:
 
       - name: Set image reference
         id: image-ref
+        if: needs.detect-changes.outputs.should-rebuild == 'true'
         run: |
           IMAGE_REF="${{ needs.security-scan.outputs.image-name }}@${{ needs.security-scan.outputs.image-digest }}"
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
@@ -372,15 +407,46 @@ jobs:
           echo "LUIGI_DB_NAME=${{ secrets.LUIGI_DB_NAME || 'luigidb' }}" >> .env.scheduler
           echo "LUIGI_DB_USER=${{ secrets.LUIGI_DB_USER || 'luigi' }}" >> .env.scheduler
           echo "LUIGI_DB_PASSWORD=${{ secrets.LUIGI_DB_PASSWORD || 'luigi123' }}" >> .env.scheduler
-          echo "SCHEDULER_IMAGE_NAME=${{ steps.image-ref.outputs.image-ref }}" >> .env.scheduler
+          echo "MINIO_ENDPOINT=${{ secrets.MINIO_ENDPOINT || 'minio.capstone.pebrisulistiyo.com' }}" >> .env.scheduler
+          echo "MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY || 'minioadmin' }}" >> .env.scheduler
+          echo "MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY || 'minioadmin' }}" >> .env.scheduler
+          echo "MINIO_BUCKET_NAME=${{ secrets.MINIO_BUCKET_NAME || 'bucket' }}" >> .env.scheduler
+          echo "MLFLOW_TRACKING_URI=${{ secrets.MLFLOW_TRACKING_URI || 'http://localhost:5000' }}" >> .env.scheduler
+          echo "MLFLOW_EXPERIMENT_NAME=${{ secrets.MLFLOW_EXPERIMENT_NAME || 'car_price_prediction' }}" >> .env.scheduler
+          echo "MLFLOW_USERNAME=${{ secrets.MLFLOW_USERNAME || '' }}" >> .env.scheduler
+          echo "MLFLOW_PASSWORD=${{ secrets.MLFLOW_PASSWORD || '' }}" >> .env.scheduler
+          if [[ "${{ needs.detect-changes.outputs.should-rebuild }}" == "true" ]]; then
+            echo "SCHEDULER_IMAGE_NAME=${{ steps.image-ref.outputs.image-ref }}" >> .env.scheduler
+          else
+            # If not rebuilding, use the current image
+            echo "Getting current image from VPS"
+            CURRENT_IMAGE=$(ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && grep -o 'SCHEDULER_IMAGE_NAME=.*' .env.scheduler | cut -d'=' -f2")
+            echo "SCHEDULER_IMAGE_NAME=${CURRENT_IMAGE}" >> .env.scheduler
+          fi
           echo "WRAPPER_IMAGE_NAME=alpine:latest" >> .env.scheduler
 
-      - name: Copy files to VPS
+      - name: Add VPS host to known hosts
         run: |
-          # Add VPS host to known hosts
           mkdir -p ~/.ssh
           ssh-keyscan ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
 
+      # Only copy src files if we're not rebuilding but need to update
+      - name: Copy src files to VPS
+        if: needs.detect-changes.outputs.should-rebuild == 'false'
+        run: |
+          # Create necessary directories on VPS
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/src ~/model-service/data ~/model-service/.dvc"
+
+          # Copy src, .dvc, and data files to VPS
+          scp -r src/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/src
+          scp -r .dvc/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/.dvc
+          scp -r data/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/data
+          scp -r .env.scheduler ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/
+
+      # Copy all files if we're rebuilding
+      - name: Copy all files to VPS
+        if: needs.detect-changes.outputs.should-rebuild == 'true'
+        run: |
           # Create necessary directories on VPS
           ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/src ~/model-service/config ~/model-service/data ~/model-service/.dvc"
 
@@ -391,15 +457,26 @@ jobs:
           scp -r data/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/data
           scp -r .dvc/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/.dvc
 
-      - name: Process Luigi Config
+      - name: Process Config Files
+        if: needs.detect-changes.outputs.should-rebuild == 'true'
         run: |
+          # Process Luigi Config
           ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.scheduler | xargs) && envsubst < config/luigi.cfg > config/luigi.cfg.tmp && mv config/luigi.cfg.tmp config/luigi.cfg"
 
+          # Process DVC Config
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.scheduler | xargs) && envsubst < .dvc/config > .dvc/config.tmp && mv .dvc/config.tmp .dvc/config"
+
       - name: Update Image
+        if: needs.detect-changes.outputs.should-rebuild == 'true'
         run: |
           ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.scheduler | xargs) && envsubst < docker-compose.yml > docker-compose.scheduler.yml"
 
-      - name: Deploy Base Services on VPS
+      - name: Deploy or Restart Service on VPS
         run: |
-          echo "Deploying service scheduler on VPS"
-          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && docker compose -f docker-compose.scheduler.yml --env-file .env.scheduler up -d luigi"
+          if [[ "${{ needs.detect-changes.outputs.should-rebuild }}" == "true" ]]; then
+            echo "Deploying rebuilt service scheduler on VPS"
+            ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && docker compose -f docker-compose.scheduler.yml --env-file .env.scheduler up -d luigi"
+          else
+            echo "Restarting service scheduler on VPS"
+            ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && docker restart luigi_scheduler"
+          fi

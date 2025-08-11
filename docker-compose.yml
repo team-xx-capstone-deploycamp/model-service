@@ -9,6 +9,8 @@ services:
       - ./src:/app/src
       - ./config/luigi.cfg:/app/config/luigi.cfg
       - ./logs:/var/log/luigi
+      - ./.dvc:/app/.dvc
+      - ./data:/app/data
     environment:
       - LUIGI_CONFIG_PATH=/app/config/luigi.cfg
       - LOG_DIR=/var/log/luigi
@@ -17,6 +19,14 @@ services:
       - LUIGI_DB_USER=${LUIGI_DB_USER:-luigi}
       - LUIGI_DB_PASSWORD=${LUIGI_DB_PASSWORD:-luigi123}
       - LUIGI_DB_PORT=${LUIGI_DB_PORT:-5432}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio.capstone.pebrisulistiyo.com}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME:-bucket}
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-http://localhost:5000}
+      - MLFLOW_EXPERIMENT_NAME=${MLFLOW_EXPERIMENT_NAME:-car_price_prediction}
+      - MLFLOW_USERNAME=${MLFLOW_USERNAME}
+      - MLFLOW_PASSWORD=${MLFLOW_PASSWORD}
 
   wrapper:
     image: ${WRAPPER_IMAGE_NAME}
