@@ -26,8 +26,11 @@ jobs:
       - uses: dorny/paths-filter@v2
         id: changes
         with:
+          base: ${{ github.event.pull_request.base.sha || github.event.before }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           filters: |
             model-training:
+              - '.github/workflows/model-training.yml'
               - 'src/pipeline/train_model.py'
               - 'data/CarPrice_Assignment.csv.dvc'
 
