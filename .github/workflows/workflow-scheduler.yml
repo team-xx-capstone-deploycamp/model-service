@@ -59,6 +59,8 @@ jobs:
               - 'docker/luigi/**/pyproject.toml'
             src-changes:
               - 'src/**'
+              - '.dvc/**'
+              - 'data/**'
             shared:
               - 'shared/**'
               - 'pyproject.toml'
@@ -405,6 +407,14 @@ jobs:
           echo "LUIGI_DB_NAME=${{ secrets.LUIGI_DB_NAME || 'luigidb' }}" >> .env.scheduler
           echo "LUIGI_DB_USER=${{ secrets.LUIGI_DB_USER || 'luigi' }}" >> .env.scheduler
           echo "LUIGI_DB_PASSWORD=${{ secrets.LUIGI_DB_PASSWORD || 'luigi123' }}" >> .env.scheduler
+          echo "MINIO_ENDPOINT=${{ secrets.MINIO_ENDPOINT || 'minio.capstone.pebrisulistiyo.com' }}" >> .env.scheduler
+          echo "MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY || 'minioadmin' }}" >> .env.scheduler
+          echo "MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY || 'minioadmin' }}" >> .env.scheduler
+          echo "MINIO_BUCKET_NAME=${{ secrets.MINIO_BUCKET_NAME || 'bucket' }}" >> .env.scheduler
+          echo "MLFLOW_TRACKING_URI=${{ secrets.MLFLOW_TRACKING_URI || 'http://localhost:5000' }}" >> .env.scheduler
+          echo "MLFLOW_EXPERIMENT_NAME=${{ secrets.MLFLOW_EXPERIMENT_NAME || 'car_price_prediction' }}" >> .env.scheduler
+          echo "MLFLOW_USERNAME=${{ secrets.MLFLOW_USERNAME || '' }}" >> .env.scheduler
+          echo "MLFLOW_PASSWORD=${{ secrets.MLFLOW_PASSWORD || '' }}" >> .env.scheduler
           if [[ "${{ needs.detect-changes.outputs.should-rebuild }}" == "true" ]]; then
             echo "SCHEDULER_IMAGE_NAME=${{ steps.image-ref.outputs.image-ref }}" >> .env.scheduler
           else
@@ -425,10 +435,12 @@ jobs:
         if: needs.detect-changes.outputs.should-rebuild == 'false'
         run: |
           # Create necessary directories on VPS
-          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/src"
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/src ~/model-service/data ~/model-service/.dvc"
 
-          # Copy only src files to VPS
+          # Copy src, .dvc, and data files to VPS
           scp -r src/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/src
+          scp -r .dvc/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/.dvc
+          scp -r data/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/data
           scp -r .env.scheduler ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/
 
       # Copy all files if we're rebuilding
@@ -445,10 +457,14 @@ jobs:
           scp -r data/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/data
           scp -r .dvc/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/.dvc
 
-      - name: Process Luigi Config
+      - name: Process Config Files
         if: needs.detect-changes.outputs.should-rebuild == 'true'
         run: |
+          # Process Luigi Config
           ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.scheduler | xargs) && envsubst < config/luigi.cfg > config/luigi.cfg.tmp && mv config/luigi.cfg.tmp config/luigi.cfg"
+
+          # Process DVC Config
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.scheduler | xargs) && envsubst < .dvc/config > .dvc/config.tmp && mv .dvc/config.tmp .dvc/config"
 
       - name: Update Image
         if: needs.detect-changes.outputs.should-rebuild == 'true'
