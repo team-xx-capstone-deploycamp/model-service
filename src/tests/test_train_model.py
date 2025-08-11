@@ -5,6 +5,12 @@ import numpy as np
 import io
 import joblib
 import luigi
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from category_encoders import BinaryEncoder
+from sklearn.model_selection import RandomizedSearchCV
 from src.pipeline.train_model import (
     LoadDataTask,
     PreprocessDataTask,
@@ -103,20 +109,30 @@ class TestPreprocessDataTask(unittest.TestCase):
     @patch('src.pipeline.train_model.os.makedirs')
     @patch('builtins.open', new_callable=mock_open)
     @patch('src.pipeline.train_model.joblib.dump')
-    def test_run(self, mock_dump, mock_file, mock_makedirs, mock_split, mock_read_csv):
+    @patch('src.pipeline.train_model.ColumnTransformer')
+    @patch('src.pipeline.train_model.OneHotEncoder')
+    @patch('src.pipeline.train_model.BinaryEncoder')
+    def test_run(self, mock_binary_encoder, mock_onehot_encoder, mock_column_transformer, 
+                 mock_dump, mock_file, mock_makedirs, mock_split, mock_read_csv):
         # Setup mocks
         mock_df = pd.DataFrame({
             'brand': ['Toyota', 'Honda'],
             'model': ['Camry', 'Civic'],
+            'fueltype': ['gas', 'diesel'],
+            'carbody': ['sedan', 'hatchback'],
             'price': [25000, 22000]
         })
         mock_read_csv.return_value = mock_df
 
-        mock_X_train = pd.DataFrame({'brand': [0], 'model': [0]})
-        mock_X_test = pd.DataFrame({'brand': [1], 'model': [1]})
+        mock_X_train = pd.DataFrame({'brand': [0], 'model': [0], 'fueltype': [0], 'carbody': [0]})
+        mock_X_test = pd.DataFrame({'brand': [1], 'model': [1], 'fueltype': [1], 'carbody': [1]})
         mock_y_train = pd.Series([25000])
         mock_y_test = pd.Series([22000])
         mock_split.return_value = (mock_X_train, mock_X_test, mock_y_train, mock_y_test)
+
+        # Mock preprocessor
+        mock_preprocessor = MagicMock()
+        mock_column_transformer.return_value = mock_preprocessor
 
         # Create task with mocked output
         task = PreprocessDataTask(input_path="/tmp/test_data.csv", output_path="/tmp/test_output")
@@ -125,7 +141,7 @@ class TestPreprocessDataTask(unittest.TestCase):
             "X_test": MagicMock(path="/tmp/test_output/X_test.csv"),
             "y_train": MagicMock(path="/tmp/test_output/y_train.csv"),
             "y_test": MagicMock(path="/tmp/test_output/y_test.csv"),
-            "encoders": MagicMock(path="/tmp/test_output/encoders.pkl")
+            "preprocessor": MagicMock(path="/tmp/test_output/preprocessor.pkl")
         })
 
         # Run task
@@ -135,7 +151,10 @@ class TestPreprocessDataTask(unittest.TestCase):
         mock_read_csv.assert_called_once()
         mock_split.assert_called_once()
         mock_makedirs.assert_called_once()
-        self.assertEqual(mock_dump.call_count, 1)  # Called for encoders
+        mock_onehot_encoder.assert_called_once()
+        mock_binary_encoder.assert_called_once()
+        mock_column_transformer.assert_called_once()
+        self.assertEqual(mock_dump.call_count, 1)  # Called for preprocessor
 
 class TestTrainModelTask(unittest.TestCase):
 
@@ -161,20 +180,33 @@ class TestTrainModelTask(unittest.TestCase):
     @patch('src.pipeline.train_model.setup_mlflow')
     @patch('src.pipeline.train_model.mlflow.start_run')
     @patch('src.pipeline.train_model.XGBRegressor')
+    @patch('src.pipeline.train_model.RandomizedSearchCV')
     @patch('builtins.open', new_callable=mock_open)
     @patch('src.pipeline.train_model.joblib.dump')
-    def test_run(self, mock_dump, mock_file, mock_xgb, mock_start_run, mock_setup, mock_read_csv):
+    @patch('src.pipeline.train_model.Pipeline')
+    @patch('src.pipeline.train_model.StandardScaler')
+    def test_run(self, mock_scaler, mock_pipeline, mock_dump, mock_file, mock_random_search, 
+                 mock_xgb, mock_start_run, mock_setup, mock_read_csv):
         # Setup mocks
-        mock_X_train = pd.DataFrame({'brand': [0, 1], 'model': [0, 1]})
+        mock_X_train = pd.DataFrame({'brand': [0, 1], 'model': [0, 1], 'fueltype': [0, 1], 'carbody': [0, 1]})
         mock_y_train = pd.Series([25000, 22000])
-        mock_X_test = pd.DataFrame({'brand': [2], 'model': [2]})
+        mock_X_test = pd.DataFrame({'brand': [2], 'model': [2], 'fueltype': [2], 'carbody': [2]})
         mock_y_test = pd.Series([20000])
 
         mock_read_csv.side_effect = [mock_X_train, mock_y_train, mock_X_test, mock_y_test]
 
-        mock_model = MagicMock()
-        mock_xgb.return_value = mock_model
-        mock_model.predict.return_value = np.array([21000])
+        # Mock pipeline and random search
+        mock_pipeline_instance = MagicMock()
+        mock_pipeline.return_value = mock_pipeline_instance
+
+        mock_best_estimator = MagicMock()
+        mock_random_search_instance = MagicMock()
+        mock_random_search_instance.best_estimator_ = mock_best_estimator
+        mock_random_search_instance.best_score_ = -1500  # Negative RMSE
+        mock_random_search_instance.best_params_ = {'model__max_depth': 6, 'model__learning_rate': 0.1}
+        mock_random_search.return_value = mock_random_search_instance
+
+        mock_best_estimator.predict.return_value = np.array([21000])
 
         mock_run_context = MagicMock()
         mock_start_run.return_value.__enter__.return_value = mock_run_context
@@ -185,7 +217,8 @@ class TestTrainModelTask(unittest.TestCase):
             "X_train": MagicMock(path="/tmp/test_preprocessed/X_train.csv"),
             "X_test": MagicMock(path="/tmp/test_preprocessed/X_test.csv"),
             "y_train": MagicMock(path="/tmp/test_preprocessed/y_train.csv"),
-            "y_test": MagicMock(path="/tmp/test_preprocessed/y_test.csv")
+            "y_test": MagicMock(path="/tmp/test_preprocessed/y_test.csv"),
+            "preprocessor": MagicMock(path="/tmp/test_preprocessed/preprocessor.pkl")
         })
 
         # Run task
@@ -195,15 +228,17 @@ class TestTrainModelTask(unittest.TestCase):
         self.assertEqual(mock_read_csv.call_count, 4)  # Called for X_train, y_train, X_test, y_test
         mock_setup.assert_called_once()
         mock_start_run.assert_called_once()
-        mock_model.fit.assert_called_once()
-        mock_model.predict.assert_called_once()
+        mock_pipeline.assert_called_once()
+        mock_random_search.assert_called_once()
+        mock_random_search_instance.fit.assert_called_once()
+        mock_best_estimator.predict.assert_called_once()
         mock_dump.assert_called_once()
 
 class TestSaveModelTask(unittest.TestCase):
 
     def test_requires(self):
         # Create task
-        task = SaveModelTask(model_path="/tmp/test_model.pkl", encoders_path="/tmp/test_preprocessed/encoders.pkl")
+        task = SaveModelTask(model_path="/tmp/test_model.pkl", preprocessor_path="/tmp/test_preprocessed/preprocessor.pkl")
 
         # Check requires
         requires = task.requires()
@@ -228,8 +263,8 @@ class TestSaveModelTask(unittest.TestCase):
     def test_run(self, mock_get_client, mock_bytesio, mock_dump, mock_load, mock_file):
         # Setup mocks
         mock_model = MagicMock()
-        mock_encoders = MagicMock()
-        mock_load.side_effect = [mock_model, mock_encoders]
+        mock_preprocessor = MagicMock()
+        mock_load.side_effect = [mock_model, mock_preprocessor]
 
         mock_buffer = MagicMock()
         mock_bytesio.return_value = mock_buffer
@@ -240,7 +275,7 @@ class TestSaveModelTask(unittest.TestCase):
         # Create task
         task = SaveModelTask(
             model_path="/tmp/test_model.pkl", 
-            encoders_path="/tmp/test_preprocessed/encoders.pkl",
+            preprocessor_path="/tmp/test_preprocessed/preprocessor.pkl",
             output_filename="test_model.pkl"
         )
 
@@ -248,8 +283,11 @@ class TestSaveModelTask(unittest.TestCase):
         task.run()
 
         # Assertions
-        self.assertEqual(mock_load.call_count, 2)  # Called for model and encoders
-        mock_dump.assert_called_once()
+        self.assertEqual(mock_load.call_count, 2)  # Called for model and preprocessor
+        mock_dump.assert_called_once_with(
+            {"model": mock_model, "preprocessor": mock_preprocessor}, 
+            mock_buffer
+        )
         mock_client.put_object.assert_called_once()
 
 class TestCarPricePredictionPipeline(unittest.TestCase):

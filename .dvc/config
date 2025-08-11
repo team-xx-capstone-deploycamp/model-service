@@ -2,6 +2,6 @@
     remote = minio
 ['remote "minio"']
     url = s3://ml-datasets
-    access_key_id = team_xx
-    secret_access_key = team-xx-minio-2025
+    access_key_id = ${MINIO_ACCESS_KEY}
+    secret_access_key = ${MINIO_SECRET_KEY}
     endpointurl = https://minio.capstone.pebrisulistiyo.com
