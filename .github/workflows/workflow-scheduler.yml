@@ -435,12 +435,10 @@ jobs:
         if: needs.detect-changes.outputs.should-rebuild == 'false'
         run: |
           # Create necessary directories on VPS
-          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/src ~/model-service/data ~/model-service/.dvc"
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/src"
 
-          # Copy src, .dvc, and data files to VPS
+          # Copy src files to VPS (data files are handled by model-training workflow)
           scp -r src/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/src
-          scp -r .dvc/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/.dvc
-          scp -r data/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/data
           scp -r .env.scheduler ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/
 
       # Copy all files if we're rebuilding
@@ -448,23 +446,18 @@ jobs:
         if: needs.detect-changes.outputs.should-rebuild == 'true'
         run: |
           # Create necessary directories on VPS
-          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/src ~/model-service/config ~/model-service/data ~/model-service/.dvc"
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/src ~/model-service/config"
 
-          # Copy files to VPS
+          # Copy files to VPS (data files are handled by model-training workflow)
           scp -r docker-compose.yml .env.scheduler ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/
           scp -r src/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/src
           scp -r config/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/config
-          scp -r data/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/data
-          scp -r .dvc/* ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/.dvc
 
       - name: Process Config Files
         if: needs.detect-changes.outputs.should-rebuild == 'true'
         run: |
           # Process Luigi Config
           ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.scheduler | xargs) && envsubst < config/luigi.cfg > config/luigi.cfg.tmp && mv config/luigi.cfg.tmp config/luigi.cfg"
-
-          # Process DVC Config
-          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.scheduler | xargs) && envsubst < .dvc/config > .dvc/config.tmp && mv .dvc/config.tmp .dvc/config"
 
       - name: Update Image
         if: needs.detect-changes.outputs.should-rebuild == 'true'

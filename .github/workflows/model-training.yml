@@ -83,6 +83,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install DVC
+        run: |
+          pip install dvc[s3]
+
+      - name: Set up DVC with MinIO
+        env:
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY || 'minioadmin' }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY || 'minioadmin' }}
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT || 'minio.capstone.pebrisulistiyo.com' }}
+        run: |
+          # Update DVC config to use HTTP instead of HTTPS
+          sed -i 's|https://|http://|g' .dvc/config
+
+          # Pull data from MinIO using DVC
+          dvc pull data/CarPrice_Assignment.csv.dvc
+
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.7.0
         with:
@@ -92,6 +113,14 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Copy data to VPS
+        run: |
+          # Create data directory on VPS if it doesn't exist
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "mkdir -p ~/model-service/data"
+
+          # Copy data file to VPS
+          scp -r data/CarPrice_Assignment.csv ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:~/model-service/data/
 
       - name: Run Luigi task for model training
         run: |

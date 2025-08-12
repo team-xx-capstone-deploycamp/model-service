@@ -27,6 +27,8 @@ services:
       - MLFLOW_EXPERIMENT_NAME=${MLFLOW_EXPERIMENT_NAME:-car_price_prediction}
       - MLFLOW_USERNAME=${MLFLOW_USERNAME}
       - MLFLOW_PASSWORD=${MLFLOW_PASSWORD}
+    networks:
+      - shared_network
 
   wrapper:
     image: ${WRAPPER_IMAGE_NAME}
@@ -48,6 +50,12 @@ services:
       - LUIGI_DB_PORT=${LUIGI_DB_PORT:-5432}
       - LOG_DIR=/app/logs
       - LUIGI_HOST=luigi_scheduler
+    networks:
+      - shared_network
 
 volumes:
   luigi_state:
+
+networks:
+  shared_network:
+    external: true

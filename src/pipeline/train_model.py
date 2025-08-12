@@ -27,6 +27,7 @@ MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 MLFLOW_EXPERIMENT_NAME = os.getenv("MLFLOW_EXPERIMENT_NAME", "car_price_prediction")
 MLFLOW_USERNAME = os.getenv("MLFLOW_USERNAME", "")
 MLFLOW_PASSWORD = os.getenv("MLFLOW_PASSWORD", "")
+MINIO_SECURE_ENDPOINT = os.getenv("MINIO_SECURE_ENDPOINT", True)
 
 # Initialize MinIO client
 def get_minio_client():
@@ -34,7 +35,7 @@ def get_minio_client():
         MINIO_ENDPOINT,
         access_key=MINIO_ACCESS_KEY,
         secret_key=MINIO_SECRET_KEY,
-        secure=True
+        secure=MINIO_SECURE_ENDPOINT
     )
 
 # Initialize MLflow
@@ -67,27 +68,17 @@ class LoadDataTask(luigi.Task):
             print(f"📄 Loading dataset from local file: {local_path}")
             df = pd.read_csv(local_path)
         else:
-            # Try to pull from DVC
-            print(f"🔄 Local file not found. Attempting to pull from DVC...")
+            # Fallback to MinIO
+            print(f"⚠️ Local file not found. Falling back to MinIO...")
+            client = get_minio_client()
             try:
-                subprocess.run(["dvc", "pull", f"{local_path}.dvc"], check=True)
-                if os.path.exists(local_path):
-                    print(f"📄 DVC pull successful. Loading dataset from: {local_path}")
-                    df = pd.read_csv(local_path)
-                else:
-                    raise FileNotFoundError(f"File {local_path} not found after DVC pull")
-            except (subprocess.SubprocessError, FileNotFoundError) as e:
-                # Fallback to MinIO
-                print(f"⚠️ DVC pull failed: {str(e)}. Falling back to MinIO...")
-                client = get_minio_client()
-                try:
-                    response = client.get_object(BUCKET_NAME, self.dataset_filename)
-                    df = pd.read_csv(io.BytesIO(response.read()))
-                    response.close()
-                    response.release_conn()
-                    print(f"📥 Dataset loaded from MinIO bucket: {BUCKET_NAME}")
-                except Exception as e:
-                    raise RuntimeError(f"Failed to load dataset from MinIO: {str(e)}")
+                response = client.get_object(BUCKET_NAME, self.dataset_filename)
+                df = pd.read_csv(io.BytesIO(response.read()))
+                response.close()
+                response.release_conn()
+                print(f"📥 Dataset loaded from MinIO bucket: {BUCKET_NAME}")
+            except Exception as e:
+                raise RuntimeError(f"Failed to load dataset from MinIO: {str(e)}")
 
         # Clean the data (remove outliers)
         print("🧹 Cleaning data and removing outliers...")
@@ -190,6 +181,8 @@ class PreprocessDataTask(luigi.Task):
 class TrainModelTask(luigi.Task):
     input_path = luigi.Parameter(default="/tmp/preprocessed_data")
     output_path = luigi.Parameter(default="/tmp/model.pkl")
+    run_name = luigi.Parameter(default="xgboost_car_price_model")
+    model_name = luigi.Parameter(default="model")
 
     # Hyperparameter tuning settings
     n_iter = luigi.IntParameter(default=50)  # Number of parameter settings sampled
@@ -219,14 +212,14 @@ class TrainModelTask(luigi.Task):
         setup_mlflow()
 
         # Start MLflow run
-        with mlflow.start_run(run_name="xgboost_car_price_model"):
+        with mlflow.start_run(run_name=self.run_name):
             # Define hyperparameter space for XGBoost
             param_space = {
                 'model__max_depth': list(range(2, 30)),
-                'model__learning_rate': [i/100 for i in range(1, 100)],
+                'model__learning_rate': [i / 100 for i in range(1, 100)],
                 'model__n_estimators': list(range(100, 201)),
-                'model__subsample': [i/10 for i in range(1, 10)],
-                'model__colsample_bytree': [i/10 for i in range(1, 10)],
+                'model__subsample': [i / 10 for i in range(1, 10)],
+                'model__colsample_bytree': [i / 10 for i in range(1, 10)],
                 'model__reg_alpha': list(np.logspace(-3, 1, 10))
             }
 
@@ -278,14 +271,11 @@ class TrainModelTask(luigi.Task):
             r2 = r2_score(y_test, y_pred)
 
             # Log metrics
-            mlflow.log_metric("rmse", rmse)
-            mlflow.log_metric("mae", mae)
-            mlflow.log_metric("mape", mape)
-            mlflow.log_metric("r2", r2)
-            mlflow.log_metric("best_cv_score", -random_search.best_score_)  # Convert back from negative
+            mlflow.log_metrics({"rmse": rmse, "mae": mae, "mape": mape, "r2": r2})
+            mlflow.log_metric("best_cv_score", -random_search.best_score_)
 
             # Log model
-            mlflow.sklearn.log_model(best_model, "model")
+            mlflow.sklearn.log_model(best_model, self.model_name)
 
             print(f"Best parameters: {best_params}")
             print(f"Model evaluation - RMSE: {rmse:.2f}, MAE: {mae:.2f}, MAPE: {mape:.4f}, R²: {r2:.4f}")

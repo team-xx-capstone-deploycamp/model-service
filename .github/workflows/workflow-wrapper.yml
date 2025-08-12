@@ -394,6 +394,9 @@ jobs:
         run: |
           ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.wrapper | xargs) && envsubst < docker-compose.yml > docker-compose.wrapper.yml"
 
+      - name: Update Luigi Dashboard
+        run: |
+          ssh ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "cd ~/model-service && export $(cat .env.wrapper | xargs) && envsubst < web/templates/luigi_frame.html > web/templates/luigi_frame.html.tmp && mv web/templates/luigi_frame.html.tmp web/templates/luigi_frame.html"
 
       - name: Deploy Base Services on VPS
         run: |

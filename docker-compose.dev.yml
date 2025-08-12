@@ -2,7 +2,7 @@ services:
   luigi:
     build:
       context: .
-      dockerfile: docker/luigi/Dockerfile
+      dockerfile: docker/luigi/Dockerfile.dev
     container_name: luigi_scheduler
     ports:
       - "8082:8082"
@@ -24,7 +24,7 @@ services:
   wrapper:
     build:
       context: .
-      dockerfile: docker/wrapper/Dockerfile
+      dockerfile: docker/wrapper/Dockerfile.dev
     container_name: luigi_wrapper
     ports:
       - "5001:5000"
