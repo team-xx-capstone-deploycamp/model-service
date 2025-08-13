@@ -1,5 +1,9 @@
 # Model Service
 
+[![CI/CD Pipeline For Luigi Scheduler](https://github.com/pebrisulistiyo/model-service/actions/workflows/workflow-scheduler.yml/badge.svg)](https://github.com/pebrisulistiyo/model-service/actions/workflows/workflow-scheduler.yml)
+[![CI/CD Pipeline For Luigi Wrapper](https://github.com/pebrisulistiyo/model-service/actions/workflows/workflow-wrapper.yml/badge.svg)](https://github.com/pebrisulistiyo/model-service/actions/workflows/workflow-wrapper.yml)
+[![Model Training Pipeline](https://github.com/pebrisulistiyo/model-service/actions/workflows/model-training.yml/badge.svg)](https://github.com/pebrisulistiyo/model-service/actions/workflows/model-training.yml)
+
 A machine learning model service with data processing and training pipelines.
 
 ## Setup
