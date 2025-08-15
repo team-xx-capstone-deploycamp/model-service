@@ -4,7 +4,18 @@
 [![CI/CD Pipeline For Luigi Wrapper](https://github.com/pebrisulistiyo/model-service/actions/workflows/workflow-wrapper.yml/badge.svg)](https://github.com/pebrisulistiyo/model-service/actions/workflows/workflow-wrapper.yml)
 [![Model Training Pipeline](https://github.com/pebrisulistiyo/model-service/actions/workflows/model-training.yml/badge.svg)](https://github.com/pebrisulistiyo/model-service/actions/workflows/model-training.yml)
 
-A machine learning model service with data processing and training pipelines.
+A machine learning model service for car price prediction with data processing and training pipelines. The service uses Luigi for task orchestration, MLflow for experiment tracking, and DVC for data version control.
+
+## What This Service Does
+
+This service provides an end-to-end machine learning pipeline for car price prediction:
+
+1. **Data Loading & Cleaning**: Loads car price data from local files or MinIO storage and performs data cleaning
+2. **Data Preprocessing**: Handles feature engineering, encoding categorical variables, and train-test splitting
+3. **Model Training**: Trains an XGBoost regression model with hyperparameter tuning
+4. **Model Evaluation**: Calculates metrics like RMSE, MAE, MAPE, and R²
+5. **Model Storage**: Saves trained models to MinIO and logs experiments to MLflow
+6. **Web Interface**: Provides a web dashboard for monitoring and managing the pipeline
 
 ## Setup
 
@@ -20,63 +31,39 @@ A machine learning model service with data processing and training pipelines.
 ```bash
 # Using uv (recommended)
 pip install uv
-uv pip install -r requirements.txt
+uv pip install -r docker/luigi/requirements.txt
+uv pip install -r docker/wrapper/requirements.txt
 uv pip install -r requirements-dev.txt
 
 # Or using pip
-pip install -r requirements.txt
+pip install -r docker/luigi/requirements.txt
+pip install -r docker/wrapper/requirements.txt
 pip install -r requirements-dev.txt
 ```
 
 ## Development
 
-### Running the Pipeline
-```bash
-# Run only the pipeline
-python app.py --pipeline
+### Running the Service with Docker (Recommended)
 
-# Run only the web application
-python app.py --web
+The easiest way to run the service is using Docker Compose:
 
-# Run both (default)
-python app.py
-```
-
-### Running with Docker
-
-#### Development Environment
 ```bash
 # Run the service with Docker Compose for development
 docker compose -f docker-compose.dev.yml up
 
-# Run the service with specific services
-docker compose -f docker-compose.dev.yml up app postgres luigi-scheduler mlflow
+# Run specific services only
+docker compose -f docker-compose.dev.yml up luigi wrapper postgres
 
 # Run in detached mode
 docker compose -f docker-compose.dev.yml up -d
-
-# Access the web interface
-# Open http://localhost:5001 in your browser
-# Default credentials: admin/admin123
 ```
 
-#### Production Environment
-```bash
-# Create a .env file with the necessary environment variables
-# Example:
-# POSTGRES_HOST=production-db-host
-# POSTGRES_DB=luigi_db
-# POSTGRES_USER=luigi_user
-# POSTGRES_PASSWORD=secure_password
-# MLFLOW_TRACKING_URI=http://production-mlflow:5000
-# LUIGI_HOST=production-luigi-scheduler
+### Accessing the Services
 
-# Run the service with Docker Compose for production
-docker compose -f docker-compose.ci.yml up -d
-
-# Access the web interface
-# Open http://localhost:5001 in your browser
-```
+Once running, you can access:
+- **Web Interface**: http://localhost:5001 (Default credentials: admin/admin123)
+- **Luigi Scheduler**: http://localhost:8082
+- **PostgreSQL**: localhost:5432 (User: luigi, Password: luigipass)
 
 ### Running Tests
 ```bash
@@ -84,58 +71,56 @@ docker compose -f docker-compose.ci.yml up -d
 uv pip install -r requirements-dev.txt
 pytest
 
-# Run tests locally with pip
-pip install -r requirements-dev.txt
-pytest
-
 # Run tests with Docker Compose
 docker compose -f docker-compose.dev.yml up test
 
 # Run a specific test with Docker Compose
-docker compose -f docker-compose.dev.yml run test pytest tests/test_pipeline.py -v
+docker compose -f docker-compose.dev.yml run test pytest src/tests/test_train_model.py -v
 ```
 
 ## CI/CD Workflow
 
-The project uses GitHub Actions for CI/CD:
+The project uses GitHub Actions for CI/CD with three main workflows:
 
-1. **Feature Branches**: Run tests and code quality checks
-2. **Dev Branch**: Run tests, build and deploy to development environment
-3. **Main Branch**: Run tests, security scans, and deploy to production
+1. **Luigi Wrapper Workflow** (.github/workflows/workflow-wrapper.yml):
+   - Triggered on pushes to main/prod branches and PRs to prod
+   - Runs code quality checks and tests for the web interface
+   - Builds and pushes Docker images to GitHub Container Registry
+   - Performs security scanning with Trivy
+   - Deploys to production VPS when merged to prod
+
+2. **Luigi Scheduler Workflow** (.github/workflows/workflow-scheduler.yml):
+   - Similar to the wrapper workflow but for the scheduler component
+   - Can perform full rebuilds or just update source files based on changes
+
+3. **Model Training Workflow** (.github/workflows/model-training.yml):
+   - Triggered after scheduler deployment or when model code changes
+   - Pulls data using DVC
+   - Runs the model training pipeline on the production environment
 
 ## Project Structure
 
 - `src/`: Source code
-  - `data/`: Data processing modules
-  - `models/`: Model training modules
-  - `pipeline/`: Luigi pipeline tasks
-- `tests/`: Test files
-- `config/`: Configuration files
-- `web/`: Web interface
+  - `pipeline/`: Luigi pipeline tasks for data processing and model training
+  - `tests/`: Test files
+- `config/`: Configuration files for Luigi and other services
+- `data/`: Data files (version controlled with DVC)
+- `web/`: Web interface for wrapper Luigi dashboard
+- `docker/`: Docker configuration files
+  - `luigi/`: Luigi scheduler Dockerfile and configuration
+  - `wrapper/`: Web interface Dockerfile and configuration
 
 ## Docker Services
 
 ### Development Environment (docker-compose.dev.yml)
 
-The development environment includes the following services:
+- **luigi**: Luigi scheduler for orchestrating pipeline tasks
+- **wrapper**: Web interface for monitoring and managing the pipeline
+- **postgres**: PostgreSQL database for storing task history
 
-- **app**: The main application service that runs the web interface and pipeline
-- **test**: A service for running tests
-- **postgres**: A PostgreSQL database for storing task history and application data
-- **luigi-scheduler**: A Luigi scheduler for managing pipeline tasks
-- **mlflow**: An MLflow server for tracking machine learning experiments
+### Production Environment
 
-### Production Environment (docker-compose.prod.yml)
-
-The production environment includes only the main application service:
-
-- **app**: The main application service that runs the web interface and pipeline
-
-In production, the PostgreSQL, Luigi scheduler, and MLflow services are expected to be provided externally, with their connection details specified through environment variables.
-
-### Service Ports
-
-- Web Interface: http://localhost:5001
-- Luigi Scheduler: http://localhost:8082
-- MLflow: http://localhost:5000
-- PostgreSQL: localhost:5432
+In production, the services are deployed to a VPS with:
+- Environment variables for configuration
+- Secure connections to external services
+- Automated deployments via GitHub Actions
